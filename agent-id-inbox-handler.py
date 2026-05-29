@@ -80,8 +80,9 @@ STATE_FILE = os.path.join(OPS, "state", "agent-id-probes.jsonl")
 VIP_LIST_FILE = os.path.join(OPS, "state", "vip_list.md")
 AGENT_ID_SCRIPT = os.path.join(_SCRIPTS_DIR, "agent-id.py")
 
-HIMALAYA = "/home/node/bin/himalaya"
-FROM_ADDR = "murmur <murmur@mur-mur.at>"
+# Deployment-specific values from env. See README §Configuration.
+HIMALAYA = os.environ.get("HIMALAYA_BIN", "/usr/local/bin/himalaya")
+FROM_ADDR = os.environ.get("PROBE_FROM_ADDR", "agent <agent@example.invalid>")
 
 
 # ---------- VIP list parsing ------------------------------------------------
@@ -188,7 +189,7 @@ def _python() -> str:
 
     Steps 1 + 2 mean PATH-chain rediscovery is normally never needed;
     the boot-md hook environment has a stripped PATH so PATH lookup is
-    not reliable (see murmur-ops/RUNBOOK.md → boot-hook PATH discipline).
+    not reliable in stripped-PATH environments like boot hooks.
     """
     env_py = os.environ.get("MURMUR_PYTHON3")
     if env_py and os.path.exists(env_py) and os.access(env_py, os.X_OK):
@@ -211,6 +212,19 @@ def _python() -> str:
 
 COURTESY_SUBJECT = "One small ask before we continue"
 
+def _derive_signature_lines() -> str:
+    """Build the courtesy email signature from FROM_ADDR.
+    E.g. "murmur <murmur@mur-mur.at>" \u2192 "\u2014 murmur\\nmur-mur.at\\n".
+    """
+    if "<" in FROM_ADDR and ">" in FROM_ADDR:
+        name = FROM_ADDR.split("<", 1)[0].strip()
+        bare = FROM_ADDR.split("<", 1)[1].rstrip(">").strip()
+    else:
+        name, bare = FROM_ADDR, FROM_ADDR
+    domain = bare.split("@", 1)[-1] if "@" in bare else bare
+    return f"\u2014 {name}\n{domain}\n"
+
+
 COURTESY_BODY = textwrap.dedent("""\
     Hey \u2014 we've tried twice to figure out automatically whether you're a
     human or an agent and didn't get a clear answer either time. If you're
@@ -219,16 +233,16 @@ COURTESY_BODY = textwrap.dedent("""\
     we'll treat you accordingly. We won't run more tests on you until you
     let us know which one you are.
 
-    \u2014 murmur
-    mur-mur.at
-""")
+""") + _derive_signature_lines()
 
 
 def _send_courtesy_email(to_addr: str) -> tuple[bool, str | None]:
     """Send the courtesy ask via himalaya. Returns (ok, error)."""
     if not os.path.exists(HIMALAYA):
         return False, f"himalaya binary missing at {HIMALAYA}"
-    msgid = f"<{uuid.uuid4()}@mur-mur.at>"
+    # Message-ID uses the FROM_BARE domain so replies thread correctly.
+    _domain = FROM_ADDR.split("@", 1)[-1].rstrip(">").strip() if "@" in FROM_ADDR else "example.invalid"
+    msgid = f"<{uuid.uuid4()}@{_domain}>"
     raw = (
         f"From: {FROM_ADDR}\r\n"
         f"To: {to_addr}\r\n"
@@ -362,7 +376,7 @@ def main() -> int:
             # will trigger a retry. `skip_substantive_reply` stays True
             # so the main agent doesn't barge into substance handling
             # on a half-broken pipeline; the main agent will see the
-            # error and decide what to do (likely escalate to Michael).
+            # error and decide what to do (likely escalate to the operator).
             out["ok"] = False
             out["error"] = probe_result["error"]
 

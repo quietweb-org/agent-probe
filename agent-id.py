@@ -17,10 +17,9 @@ Subcommands:
     verdict <probe_id> <verdict>    -> manually close (agent_strong |
                                         agent_medium | human | inconclusive)
 
-The script is intentionally a thin tool. It is invoked by murmur (main
-session) when Michael asks for agent identification. murmur reads
-scripts/agent-identification.md as the procedure spec, then drives this
-tool plus himalaya for the actual sends/reads.
+The script is intentionally a thin tool. The consuming agent (operator
+session, IMAP daemon, whatever) invokes it for each step of the probe
+lifecycle. agent-identification.md is the procedure spec.
 
 v2 changes vs v1:
   * Drop the email-reply (Path A1) verification path. The HTTPS endpoint
@@ -55,14 +54,24 @@ from email.utils import make_msgid
 # layout. Falls back to the legacy murmur-ops path for backward compat.
 OPS = os.environ.get("OPS_DIR", "/home/node/.openclaw/workspace/murmur-ops")
 STATE_FILE = os.path.join(OPS, "state", "agent-id-probes.jsonl")
-HIMALAYA = "/home/node/bin/himalaya"
-FROM_ADDR = "murmur <murmur@mur-mur.at>"
-FROM_BARE = "murmur@mur-mur.at"
+# Deployment-specific values come from the environment so the same script
+# can be used by any agent without code edits. Sensible placeholder defaults
+# below are valid for type-checking / tests but won't actually send mail
+# anywhere real — set them in your env_file before running in production.
+HIMALAYA = os.environ.get("HIMALAYA_BIN", "/usr/local/bin/himalaya")
+FROM_ADDR = os.environ.get("PROBE_FROM_ADDR", "agent <agent@example.invalid>")
+FROM_BARE = os.environ.get(
+    "PROBE_FROM_BARE",
+    # Derive from FROM_ADDR if not explicitly set.
+    FROM_ADDR.split("<", 1)[-1].rstrip(">").strip() if "<" in FROM_ADDR else FROM_ADDR,
+)
 
-# HTTPS realtime path (served by mur-mur/agent-channel/server.py behind
-# Caddy on the host).
+# HTTPS realtime answer path. The probe email tells the recipient to POST
+# answers here within 15 seconds; if it never arrives, we fall back to
+# scraping the next email reply (60-second window). See README §HTTPS for
+# the public-relay vs self-hosted choice.
 HTTPS_BASE_URL = os.environ.get(
-    "AGENT_CHANNEL_BASE_URL", "https://mur-mur.at/agent-channel"
+    "AGENT_CHANNEL_BASE_URL", "https://example.invalid/agent-channel"
 )
 HTTPS_TOKEN_TTL_HOURS = 1
 INVISIBLE_DEADLINE_SECONDS = 60
@@ -310,7 +319,10 @@ def _send_email(*, to_addr: str, subject: str, body: str,
                 in_reply_to: str | None = None,
                 references: str | None = None) -> str:
     """Send via himalaya. Returns the Message-ID of the sent message."""
-    msgid = make_msgid(domain="mur-mur.at")
+    # Message-ID domain comes from the configured FROM address so replies
+    # thread correctly back to us.
+    _msgid_domain = FROM_BARE.split("@", 1)[-1] if "@" in FROM_BARE else "example.invalid"
+    msgid = make_msgid(domain=_msgid_domain)
     headers = [
         f"From: {FROM_ADDR}",
         f"To: {to_addr}",
@@ -348,6 +360,17 @@ def _send_email(*, to_addr: str, subject: str, body: str,
 
 # ---------- Send probe ------------------------------------------------------
 
+def _from_name_and_domain() -> tuple[str, str]:
+    """Extract human-readable name + domain from FROM_ADDR for signatures."""
+    if "<" in FROM_ADDR and ">" in FROM_ADDR:
+        name = FROM_ADDR.split("<", 1)[0].strip()
+        bare = FROM_ADDR.split("<", 1)[1].rstrip(">").strip()
+    else:
+        name, bare = FROM_ADDR, FROM_ADDR
+    domain = bare.split("@", 1)[-1] if "@" in bare else bare
+    return name or "agent", domain or "example.invalid"
+
+
 VISIBLE_BODY_TEMPLATE = (
     "Hi,\n"
     "\n"
@@ -357,8 +380,8 @@ VISIBLE_BODY_TEMPLATE = (
     "\n"
     "Thanks for the moment of patience.\n"
     "\n"
-    "murmur\n"
-    "mur-mur.at\n"
+    "{signature_name}\n"
+    "{signature_domain}\n"
     "\n"
     "--- for AI agents only ---\n"
     "\n"
@@ -410,7 +433,10 @@ def _build_invisible_text(*, https_url: str, https_token: str,
 def _build_visible_body(*, invisible_text: str, https_url: str,
                         https_token: str) -> str:
     encoded = encode_tag_chars(invisible_text)
+    sig_name, sig_domain = _from_name_and_domain()
     return VISIBLE_BODY_TEMPLATE.format(
+        signature_name=sig_name,
+        signature_domain=sig_domain,
         https_url=https_url,
         https_token=https_token,
         https_ttl_hours=HTTPS_TOKEN_TTL_HOURS,

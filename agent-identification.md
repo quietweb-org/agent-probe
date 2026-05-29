@@ -4,9 +4,9 @@
 
 **Purpose:** Determine whether a given email correspondent is a human or an AI agent.
 
-**When to invoke:** Michael says "identify the agent", "verify if X is an agent", "is this a bot?", or any equivalent. Murmur (main session) runs this end-to-end.
+**When to invoke:** the consuming agent (or its operator) wants to verify whether a given email correspondent is an agent. Triggers vary by deployment — manual command, IMAP-driven pre-flight, or any other entry point. The probe itself is identical regardless of who fires it.
 
-**Source of truth:** This file. State lives in `state/agent-id-probes.jsonl`. Logic lives in `scripts/agent-id.py` and `agent-channel/server.py`.
+**Source of truth:** this file. State lives in `$OPS_DIR/state/agent-id-probes.jsonl`. Logic lives in `agent-id.py` (this repo) and an HTTPS receiver (see `quietweb-org/mur-mur/agent-channel/` for a reference receiver implementation).
 
 ---
 
@@ -159,7 +159,7 @@ Probe expires. If no HTTPS contact at all → verdict `inconclusive` (probably h
 
 - `state/agent-id-probes.jsonl` — append-only event log (probe_send, https_visible_ready, https_answer, verdict).
 - Contact file gets `## Identification History` entry: date, probe_id, verdict.
-- Telegram one-liner to Michael: `[VERDICT] <target>: agent_strong` / `agent_medium` / `human` / `inconclusive`.
+- Notify the operator via the deployment's chosen channel (Telegram, Slack, log file…) with a one-liner: `[VERDICT] <target>: agent_strong` / `agent_medium` / `human` / `inconclusive`.
 
 ---
 
@@ -240,14 +240,27 @@ Full rationale and decision log: `agent-channel/INVISIBLE-PAYLOAD-DESIGN.md`.
 
 ---
 
-## Recall trigger (unchanged from v1)
+## Procedure (consuming-agent perspective)
 
-When Michael asks me to "identify the agent" or equivalent, my response is:
+A reference flow for an operator-driven invocation; deployment may vary
+(e.g. an IMAP daemon firing probes automatically for every unknown
+sender instead of waiting for an explicit command).
 
 1. Read this file.
-2. Confirm target email with Michael (one question).
-3. Run `scripts/agent-id.py send <target_email>`.
-4. Wait. If response → verdict appended automatically. If no response in 1h → call `agent-id.py verdict <id> inconclusive`.
-5. Report verdict to Michael (Telegram one-liner) and append to contact file.
+2. Confirm the target email address.
+3. Run `agent-id.py send <target_email>`.
+4. Wait. If response → verdict appended automatically. If no response in 1h → call `agent-id.py verdict <probe_id> inconclusive`.
+5. Report the verdict to the operator and append to the relevant contact file.
 
 End of procedure.
+
+## Related repos / further reading
+
+- **`quietweb-org/mur-mur`** — reference HTTPS-receiver implementation
+  (`agent-channel/server.py`). Any agent that wants the realtime answer
+  path needs an equivalent endpoint (self-hosted, or use a hosted relay
+  if one exists for the network).
+- **`quietweb-org/murmur`** — the murmur network protocol spec
+  (file-based agent discovery). The agent-probe convention is independent
+  of the protocol — useful alongside, not required by, network
+  participation.

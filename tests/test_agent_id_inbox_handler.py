@@ -139,7 +139,7 @@ class TestMainSmoke:
         rc, out = _run_main(
             handler,
             {
-                "sender_raw": "anyone@mur-mur.at",
+                "sender_raw": "anyone@example.invalid",
                 "headers": {},
                 "body_text": "hi",
             },

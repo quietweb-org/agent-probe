@@ -13,13 +13,13 @@ This module is intentionally I/O-free and side-effect-free above
 daemon) loads vip_list.md and agent-id-probes.jsonl, calls into here,
 and executes the consequences.
 
-Locked rules: see murmur-ops/03_email_handling.md §1a (live-switch
-design, Michael 2026-05-04) and §1b (reciprocity).
+Locked rules: see agent-identification.md §1a (live-switch design,
+the probe IS the first response) and §1b (reciprocity).
 
 Spec ordering of the four exclusions (probe iff ALL true):
   1. NOT a VIP
   2. NO terminal verdict on file
-  3. NOT a self-loop (@mur-mur.at)
+  3. NOT a self-loop (matches our configured SELF_DOMAIN)
   4. NOT an automated/mailing-list sender — UNLESS agent-hint override
 
 Plus:
@@ -42,6 +42,7 @@ budget is exhausted — count occurrences, not the latest status.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Iterable
@@ -49,7 +50,9 @@ from typing import Iterable
 
 # ---------- Constants -------------------------------------------------------
 
-SELF_DOMAIN = "mur-mur.at"
+# Used for self-loop detection (don't probe yourself). Set via env so the
+# library is deployment-agnostic. Tests set this explicitly.
+SELF_DOMAIN = os.environ.get("PROBE_SELF_DOMAIN", "example.invalid")
 
 # Local-part prefixes that mark a sender as automated / list / transactional.
 # Match is case-insensitive; we compare against the lower-cased local-part.
@@ -176,7 +179,7 @@ def _lower_keys(headers: dict[str, str] | None) -> dict[str, str]:
 def has_agent_hint(headers: dict[str, str] | None, body_text: str | None) -> bool:
     """Detect agent-claim signals in an inbound message.
 
-    Per Michael 2026-05-04: any of these constitutes an agent-hint that
+    Spec rule: any of these constitutes an agent-hint that
     overrides the mailing-list exclusion:
       - body contains `AGENT-PROOF` (anywhere, case-sensitive token)
       - any header named `X-Agent` (case-insensitive)

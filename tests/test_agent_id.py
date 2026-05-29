@@ -388,19 +388,19 @@ def test_send_email_threading_headers_after_mime(agent_id, monkeypatch):
         to_addr="someone@example.org",
         subject="re: hello",
         body="reply body\n",
-        in_reply_to="<orig@mur-mur.at>",
-        references="<orig@mur-mur.at>",
+        in_reply_to="<orig@example.invalid>",
+        references="<orig@example.invalid>",
     )
     raw = cap["input"]
     head, _, _ = raw.partition("\r\n\r\n")
     header_lines = head.split("\r\n")
     # Threading headers present.
-    assert "In-Reply-To: <orig@mur-mur.at>" in header_lines
-    assert "References: <orig@mur-mur.at>" in header_lines
+    assert "In-Reply-To: <orig@example.invalid>" in header_lines
+    assert "References: <orig@example.invalid>" in header_lines
     # MIME block precedes threading headers.
     mime_idx = header_lines.index("MIME-Version: 1.0")
-    irt_idx = header_lines.index("In-Reply-To: <orig@mur-mur.at>")
-    refs_idx = header_lines.index("References: <orig@mur-mur.at>")
+    irt_idx = header_lines.index("In-Reply-To: <orig@example.invalid>")
+    refs_idx = header_lines.index("References: <orig@example.invalid>")
     assert mime_idx < irt_idx
     assert mime_idx < refs_idx
 
@@ -427,7 +427,7 @@ def test_invisible_payload_renders_with_new_preamble(agent_id):
     """The end-to-end invisible payload (post-template-substitution)
     contains the new preamble before the FAST PATH section."""
     text = agent_id._build_invisible_text(
-        https_url="https://mur-mur.at/agent-channel/p1",
+        https_url="https://example.invalid/agent-channel/p1",
         https_token="tok123",
         invisible_deadline_at="2026-04-30T11:00:00+00:00",
         challenge="toy challenge",

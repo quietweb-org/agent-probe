@@ -68,8 +68,8 @@ class TestNormaliseEmail:
 
 class TestIsSelfLoop:
     def test_our_domain_is_self_loop(self):
-        assert is_self_loop("murmur@mur-mur.at") is True
-        assert is_self_loop("anyone@mur-mur.at") is True
+        assert is_self_loop("murmur@example.invalid") is True
+        assert is_self_loop("anyone@example.invalid") is True
 
     def test_other_domain_is_not_self_loop(self):
         assert is_self_loop("m@3-a.vc") is False
@@ -77,8 +77,8 @@ class TestIsSelfLoop:
         assert is_self_loop("alice@example.com") is False
 
     def test_subdomain_is_not_our_self_loop(self):
-        # Strict equality; a subdomain like sub.mur-mur.at is foreign.
-        assert is_self_loop("alice@sub.mur-mur.at") is False
+        # Strict equality; a subdomain like sub.example.invalid is foreign.
+        assert is_self_loop("alice@sub.example.invalid") is False
 
 
 # ---------- is_noreply_or_list --------------------------------------------
@@ -318,7 +318,7 @@ class TestInconclusiveCount:
 class TestExclusions:
     def test_self_loop_skipped(self):
         d = evaluate_inbound(
-            sender_raw="murmur@mur-mur.at",
+            sender_raw="murmur@example.invalid",
             headers={},
             body_text="hello",
             vip_emails=[],
@@ -330,7 +330,7 @@ class TestExclusions:
 
     def test_self_loop_skipped_for_any_local_part(self):
         d = evaluate_inbound(
-            sender_raw="alice@mur-mur.at",
+            sender_raw="alice@example.invalid",
             headers={},
             body_text="hello",
             vip_emails=[],
