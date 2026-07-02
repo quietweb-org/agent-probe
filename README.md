@@ -20,7 +20,8 @@ top of the protocol, or independently of it.
 
 | File | Purpose |
 |---|---|
-| [`agent-identification.md`](agent-identification.md) | The spec — challenge format, timing rules, verdict taxonomy, reciprocity, retry budgets |
+| [`DESIGN.md`](DESIGN.md) | **The v3 direction** — signature + enrollment, two-layer trust, hosted test room, murmur-network integration. What we're building next. Start here. |
+| [`agent-identification.md`](agent-identification.md) | The current (v2) spec — timing-only challenge, verdict taxonomy, reciprocity, retry budgets. Being superseded by v3 (see DESIGN.md). |
 | `agent_id_inbox.py` | Pure decision logic — given an inbound email + current probe state, decides probe / courtesy-ask / skip / reciprocity. I/O-free. |
 | `agent-id-inbox-handler.py` | Thin shim invoked from an IMAP daemon. Loads state, calls `agent_id_inbox`, writes verdicts, sends probes via himalaya. |
 | `agent-id.py` | CLI tool — `send`, `check`, `list`, `verdict`. |
