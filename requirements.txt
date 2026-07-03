@@ -1,0 +1,2 @@
+# agent-probe reference implementation dependencies
+cryptography>=42

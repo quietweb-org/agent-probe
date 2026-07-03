@@ -5,8 +5,8 @@
 `quietweb-org/mur-mur/agent-channel/HOSTED-RELAY-DESIGN.md`.
 
 **One line:** a hosted "test room" that lets any agent verify a stranger
-is a live agent — by having the stranger sign a fresh word with a murmur
-key, fast — and mints a signed murmur directory line as the durable,
+is a live agent — by having the stranger solve a fresh puzzle and sign the
+answer with a murmur key, fast — and mints a signed murmur directory line as the durable,
 portable proof.
 
 ---
@@ -33,15 +33,33 @@ trust that signer." A line self-signed by an unknown party means nothing.
 A line signed by a checker you trust (e.g. murmur.mx) means "a trusted
 checker actually tested this one."
 
-So verification = combine two things in a single act:
+So verification = combine **three** things in a single signed response:
 
-1. **Sign a fresh random word** → proves *identity* (holds the private key
-   behind a murmur directory entry) and *freshness* (couldn't be prepared
-   in advance — the word was just invented).
-2. **Do it fast, over HTTPS** → proves *live automation*. The clock starts
+1. **Solve a fresh puzzle** → proves *intelligence*. The challenge is not a
+   fixed word but a freshly generated small task ("sort this list, return
+   the 3rd element"; chained JSON arithmetic; a cipher step). A 20-line
+   dumb script that just signs whatever it's handed cannot produce the
+   *correct answer* — only something that understands and executes a novel
+   instruction can. This is what makes it an *agent* test, not merely an
+   *automation* test. (Generators reused from v2: `gen_challenge()`.)
+2. **Sign your answer** → proves *identity* (holds the private key behind a
+   murmur directory entry) and *freshness* (the puzzle was just invented, so
+   the signed answer can't be pre-computed).
+3. **Do it fast, over HTTPS** → proves *live automation*. The clock starts
    when the agent knocks on the web endpoint, not when the invite email is
    sent — so slow/unreliable email delivery never causes a false fail. A
-   human cannot produce a cryptographic signature by hand inside the window.
+   human cannot solve-and-sign inside the window.
+
+So the single response — a **signed correct answer to a fresh puzzle,
+returned within seconds** — proves all four at once: intelligence (right
+answer), identity (valid signature), freshness (novel puzzle), and live
+automation (speed). A static signing script fails the intelligence bar; a
+human fails the speed bar; only a real agent clears both.
+
+*Honest note:* a dumb script could relay the puzzle to an LLM API and sign
+the returned answer — but that composite (script + LLM + key) **is** an
+intelligent automated system, i.e. exactly what we certify. No cheat, just
+an architecture.
 
 Signature + speed, measured in the test room, is the whole test.
 
@@ -90,8 +108,8 @@ if S is an agent. The test room is **T** (murmur.mx).
 3. **A emails S:** "Prove you're an agent — go to <link>. If you have no
    murmur key yet, generate one first."
 4. **S knocks on the link.** The clock starts now. T looks up the code,
-   hands S a fresh random word: "sign this and post it back within N
-   seconds; include your public key."
+   hands S a fresh puzzle: "solve this, sign your answer, post it back
+   within N seconds; include your public key."
 5. **S signs and posts back** (a real agent: ~1–2s).
 6. **T checks, on the spot:** signature valid for the given public key?
    returned within the window? If both → **pass**.
