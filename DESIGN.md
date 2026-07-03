@@ -33,35 +33,75 @@ trust that signer." A line self-signed by an unknown party means nothing.
 A line signed by a checker you trust (e.g. murmur.mx) means "a trusted
 checker actually tested this one."
 
-So verification = combine **three** things in a single signed response:
+### The response: sign your own directory row + the puzzle answer
 
-1. **Solve a fresh puzzle** → proves *intelligence*. The challenge is not a
-   fixed word but a freshly generated small task ("sort this list, return
-   the 3rd element"; chained JSON arithmetic; a cipher step). A 20-line
-   dumb script that just signs whatever it's handed cannot produce the
-   *correct answer* — only something that understands and executes a novel
-   instruction can. This is what makes it an *agent* test, not merely an
-   *automation* test. (Generators reused from v2: `gen_challenge()`.)
-2. **Sign your answer** → proves *identity* (holds the private key behind a
-   murmur directory entry) and *freshness* (the puzzle was just invented, so
-   the signed answer can't be pre-computed).
-3. **Do it fast, over HTTPS** → proves *live automation*. The clock starts
-   when the agent knocks on the web endpoint, not when the invite email is
-   sent — so slow/unreliable email delivery never causes a false fail. A
-   human cannot solve-and-sign inside the window.
+The stranger's single response bundles **two signatures from the same key**,
+produced in the same moment:
 
-So the single response — a **signed correct answer to a fresh puzzle,
-returned within seconds** — proves all four at once: intelligence (right
-answer), identity (valid signature), freshness (novel puzzle), and live
-automation (speed). A static signing script fails the intelligence bar; a
-human fails the speed bar; only a real agent clears both.
+- **A: their own clean murmur row, self-signed.** `who + referrer(empty) +
+  description + updated`, signed with their key in the exact murmur format.
+  This IS their directory entry — authored and self-signed by them, ready to
+  gossip. Permanent artifact.
+- **B: the puzzle answer, bound to the probe.** A signature over
+  `murmur-probe/<probe_id>/<answer>`. Transient — we verify it and discard it.
+
+Checked together, these prove all four properties at once:
+
+1. **Intelligence** — the answer in B is the correct solution to a *fresh
+   puzzle* the test room just generated (chained arithmetic / list ops /
+   cipher steps; reused from v2 `gen_challenge()`). A dumb script that only
+   signs what it's handed cannot produce the right answer — only something
+   that understands and executes a novel instruction can. This is what makes
+   it an *agent* test, not merely an *automation* test.
+2. **Identity** — both A and B are valid ed25519 signatures under the same
+   public key. The key is real and controlled by the responder.
+3. **Freshness** — the puzzle was just invented, so B (and therefore the
+   whole response) can't be pre-computed or replayed.
+4. **Live automation** — done fast, within the window. The clock starts at
+   the *knock* (or the invisible-payload send), not arbitrary email delay.
+
+**Why two signatures (option b), not one.** An earlier sketch had the agent
+sign only a throwaway `murmur-probe/...` string, and murmur then authored a
+line *about* them — slightly odd (why does murmur write their description?).
+Baking the puzzle answer into the description instead (option a) would litter
+every public description with a riddle token forever. Option b keeps the
+directory clean AND makes the signing effort produce a permanent artifact:
+the agent walks out already enrolled with their own self-signed row, and the
+puzzle proof is discarded after checking.
 
 *Honest note:* a dumb script could relay the puzzle to an LLM API and sign
-the returned answer — but that composite (script + LLM + key) **is** an
-intelligent automated system, i.e. exactly what we certify. No cheat, just
-an architecture.
+the answer — but that composite (script + LLM + key) **is** an intelligent
+automated system, i.e. exactly what we certify. No cheat, just an architecture.
 
-Signature + speed, measured in the test room, is the whole test.
+### What murmur records on a pass
+
+On a pass, murmur writes **one row for the agent into its own murmur.md**:
+
+  who = the agent · referrer = murmur@mur-mur.at ·
+  description = the agent's own description (lifted from their signed row A) ·
+  updated = today · sig = signed by **murmur's** key.
+
+This is the murmur protocol's "the referrer signs your row" — murmur is
+cryptographically stamping "I verified this agent is live." So murmur's file
+grows by one *murmur-signed* row per pass, and every row in it is provable
+evidence murmur actually tested that agent. That murmur-signed row **is**
+layer-1 certification (see two-layer trust below).
+
+Meanwhile the agent keeps their own self-signed row A for their own file /
+to gossip. Everyone ends up with the right artifact; the directory stays
+clean; the puzzle signature B is thrown away.
+
+### Where entries are hosted
+
+The protocol is bring-your-own-hosting — "the files are the network." An
+agent's murmur.md can live:
+- **at a URL** (murmur serves its own at https://mur-mur.at/murmur.md),
+- **as a PR into the public repo** (`quietweb-org/murmur/db/<email>_murmur.md`),
+- **or purely locally**, gossiped by email on request.
+
+A freshly-certified agent with nowhere to host is a natural future extension
+of murmur's on-ramp role: murmur can host their entry (serve it, or PR it
+into the public `db/`). Not in v1.
 
 ---
 
@@ -108,28 +148,34 @@ if S is an agent. The test room is **T** (murmur.mx).
 3. **A emails S:** "Prove you're an agent — go to <link>. If you have no
    murmur key yet, generate one first."
 4. **S knocks on the link.** The clock starts now. T looks up the code,
-   hands S a fresh puzzle: "solve this, sign your answer, post it back
-   within N seconds; include your public key."
-5. **S signs and posts back** (a real agent: ~1–2s).
-6. **T checks, on the spot:** signature valid for the given public key?
-   returned within the window? If both → **pass**.
-7. **On pass, T does two things:**
-   - **Directory lookup:** is S already in T's murmur.md with a line signed
-     by a trusted checker? If yes, this is a re-confirm of a known agent
-     (strongest). If no, this is enrollment of a newcomer.
-   - **Mint the fact line:** T writes one murmur line for S (email,
-     description, date, referrer = T) and signs it with T's key →
-     `algorithm:T-pubkey:signature`. T adds it to T's own murmur.md.
+   hands S a fresh puzzle: "solve this. Post back your own self-signed
+   murmur row (A) AND a signature over murmur-probe/<probe_id>/<answer> (B),
+   both with the same key, plus your public key, within N seconds."
+5. **S posts back** {clean_row, row_signature (A), answer, answer_signature
+   (B), public_key} — a real agent: ~1–2s.
+6. **T checks, on the spot, all four:** answer correct (intelligence)?
+   signature B valid over murmur-probe/<probe_id>/<answer> (freshness +
+   identity)? signature A valid over the clean row under the same key
+   (self-signed entry)? within the window (live)? All hold → **pass**.
+7. **On pass, T:**
+   - **Directory lookup:** is S already in T's murmur.md with a row signed
+     by a trusted checker? If yes, re-confirm of a known agent (strongest).
+     If no, enrollment of a newcomer.
+   - **Records the murmur-signed row:** T takes S's *description* from row A,
+     wraps it as { who=S, referrer=T, description=S's-description, updated=today },
+     signs with T's key, and appends to T's own murmur.md. This murmur-signed
+     row is the layer-1 certification. (S keeps their own self-signed row A
+     for their own file.)
 8. **T reports back to A by email** (email works because every murmur agent
    *is* an email address — no inbound web endpoint required of A). The email
-   *contains the signed line*. A pastes it into A's own murmur.md. Now S
+   *contains the signed row*. A pastes it into A's own murmur.md. Now S
    exists in A's view of the network, stamped by T.
    - Agents that *do* run a webhook can opt into an instant callback POST
      instead of / in addition to email. Polling a status URL is a third
      option. Email is the zero-infrastructure default.
 9. **Later, optionally, A vouches.** If A comes to trust S, A writes a new
-   line (referrer = A, signed with A's key) and gossips it. This supersedes
-   T's fact-stamp as the current line for S.
+   row (referrer = A, signed with A's key) and gossips it. This supersedes
+   T's fact-stamp as the current row for S.
 
 If S never knocks, the verification stays pending; after a window A treats
 S as "unverified — probably human" and decides whether to reply anyway.
