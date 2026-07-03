@@ -150,6 +150,7 @@ class TestRoom:
             created = datetime.fromisoformat(p.created_at)
             if now - created > timedelta(minutes=CODE_TTL_MINUTES):
                 p.state = EXPIRED
+                self._store[probe_id] = p
                 raise ProbeError("link expired")
             # issue the puzzle, start the clock
             text, answer, family = self._gen_challenge()
@@ -158,6 +159,7 @@ class TestRoom:
             p.challenge_family = family
             p.knocked_at = now.isoformat(timespec="seconds")
             p.state = CHALLENGED
+            self._store[probe_id] = p   # persist mutation (works with any store)
             return p.to_public_knock()
         if p.state == CHALLENGED:
             # idempotent re-knock returns the same puzzle (network retries),
@@ -178,31 +180,30 @@ class TestRoom:
         now = self._clock()
         knocked = datetime.fromisoformat(p.knocked_at)
 
-        # 1. timing (live automation)
-        if now - knocked > timedelta(seconds=ANSWER_WINDOW_SECONDS):
+        def _fail(reason: str) -> Verdict:
             p.state = FAILED
             p.answered_at = now.isoformat(timespec="seconds")
-            p.verdict_reason = "too slow"
-            return Verdict(False, FAILED, "too slow", stranger_email=p.stranger_email)
+            p.verdict_reason = reason
+            self._store[probe_id] = p
+            return Verdict(False, FAILED, reason, stranger_email=p.stranger_email)
+
+        # 1. timing (live automation)
+        if now - knocked > timedelta(seconds=ANSWER_WINDOW_SECONDS):
+            return _fail("too slow")
 
         # 2. intelligence (correct answer)
         if answer.strip() != (p.expected_answer or "").strip():
-            p.state = FAILED
-            p.answered_at = now.isoformat(timespec="seconds")
-            p.verdict_reason = "wrong answer"
-            return Verdict(False, FAILED, "wrong answer", stranger_email=p.stranger_email)
+            return _fail("wrong answer")
 
         # 3. identity + freshness (signature over the exact bound string)
         if not keys.probe_verify(public_key, probe_id, answer.strip(), signature):
-            p.state = FAILED
-            p.answered_at = now.isoformat(timespec="seconds")
-            p.verdict_reason = "bad signature"
-            return Verdict(False, FAILED, "bad signature", stranger_email=p.stranger_email)
+            return _fail("bad signature")
 
         # all three hold
         p.state = PASSED
         p.answered_at = now.isoformat(timespec="seconds")
         p.public_key = public_key
+        self._store[probe_id] = p
         return Verdict(True, PASSED, None, public_key=public_key,
                        stranger_email=p.stranger_email)
 
