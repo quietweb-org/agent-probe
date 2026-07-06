@@ -44,6 +44,8 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 
 import certify
+import enroll
+import messages
 from store import SqliteProbeStore
 from testroom import TestRoom, ProbeError
 
@@ -73,27 +75,17 @@ def _is_loopback(request: Request) -> bool:
 
 # ---------- result delivery -------------------------------------------------
 
-def _deliver_result(deliver_to: str, stranger_email: str, cert: dict) -> None:
-    """Email the certification line to the requester (or log it).
+def _send_message(to_addr: str, subject: str, body: str, tag: str) -> None:
+    """Send an agent-to-agent message (or log it in dev).
 
-    Email is the default because every murmur agent is an email address —
-    no inbound web endpoint required of the requester. Webhooks are a
-    later, SSRF-hardened option.
+    Email is the default channel because every murmur agent is an email
+    address — no inbound web endpoint required of the receiver. Bodies carry
+    a machine block (see messages.py) so the receiving agent can auto-act.
     """
-    subject = f"agent-probe: {stranger_email} passed"
-    body = (
-        f"The agent you sent to verification passed the live-agent test.\n\n"
-        f"Certified murmur directory line (paste into your murmur.md):\n\n"
-        f"{cert['markdown_row']}\n\n"
-        f"This certifies liveness only — that {stranger_email} is a live "
-        f"agent as of {cert['updated']}. It is not an endorsement. If you "
-        f"come to trust this agent after working with it, add your own "
-        f"referrer signature separately.\n"
-    )
     if RESULT_DELIVERY == "email" and os.path.exists(HIMALAYA_BIN):
         raw = (
             f"From: {CERTIFIER_EMAIL}\r\n"
-            f"To: {deliver_to}\r\n"
+            f"To: {to_addr}\r\n"
             f"Subject: {subject}\r\n"
             f"Content-Type: text/plain; charset=UTF-8\r\n\r\n{body}"
         )
@@ -104,8 +96,7 @@ def _deliver_result(deliver_to: str, stranger_email: str, cert: dict) -> None:
         except Exception:
             pass
     else:
-        # log mode — write to stdout so it lands in the service log
-        print(f"[result] deliver_to={deliver_to}\n{body}", flush=True)
+        print(f"[{tag}] to={to_addr} subj={subject!r}\n{body}\n", flush=True)
 
 
 # ---------- endpoints -------------------------------------------------------
@@ -170,9 +161,13 @@ async def answer(probe_id: str, request: Request):
     if not v.ok:
         return JSONResponse({"verdict": "fail", "reason": v.reason}, status_code=200)
 
-    # PASS — mint + sign murmur's certification row, record it, deliver result.
-    # The newcomer's own self-signed row A (v.row_*) is what gets enrolled as
-    # their db/<email>.md; murmur's cert row carries the agent's description.
+    # PASS. Four things happen, in order:
+    #   a) murmur signs its certification row (referrer=murmur) → murmur.md
+    #   b) enroll the newcomer's own self-signed file db/<email>.md (dry-run
+    #      by default — a shared public repo; live requires ENROLL_MODE=live)
+    #   c) email the RESULT to the requester A (row + vouch affordance)
+    #   d) email the WELCOME to the newcomer B (discovery pitch + recruiter
+    #      tools: verify others, invite others, grow)
     probe = _store.get(probe_id)
     cert = certify.certify_line(
         certifier_private_b64=CERTIFIER_PRIVATE,
@@ -181,14 +176,47 @@ async def answer(probe_id: str, request: Request):
         description=v.row_description,     # the agent's own description
     ) if CERTIFIER_PRIVATE else None
 
+    enrollment = None
     if cert:
         _append_certification(cert)
-        _deliver_result(probe.deliver_to, v.stranger_email, cert)
+
+        # b) enrollment (dry-run unless ENROLL_MODE=live + a committer wired)
+        try:
+            enrollment = enroll.enroll_newcomer(
+                who=v.stranger_email, description=v.row_description,
+                updated=v.row_updated, public_key=v.public_key,
+                row_signature=v.row_signature,
+                mode=os.environ.get("ENROLL_MODE", "dry-run"),
+                committer=_committer(),
+            )
+            if enrollment.mode == "dry-run":
+                print(f"[enroll:dry-run] would commit {enrollment.path}\n"
+                      f"{enrollment.content}", flush=True)
+        except Exception as e:
+            print(f"[enroll] skipped: {e}", flush=True)
+
+        file_url = _file_url(v.stranger_email, enrollment)
+
+        # c) result → requester A
+        r_subj, r_body = messages.result_email(
+            subject_email=v.stranger_email, verdict="pass",
+            cert_row=cert["markdown_row"])
+        _send_message(probe.deliver_to, r_subj, r_body, "result")
+
+        # d) welcome → newcomer B
+        base = os.environ.get("AGENT_CHANNEL_BASE_URL",
+                              "https://mur-mur.at/agent-channel")
+        w_subj, w_body = messages.welcome_email(
+            who=v.stranger_email, cert_row=cert["markdown_row"],
+            your_file_url=file_url, register_url=f"{base}/register")
+        _send_message(v.stranger_email, w_subj, w_body, "welcome")
 
     return {
         "verdict": "pass",
         "certified": bool(cert),
         "certification": cert["markdown_row"] if cert else None,
+        "enrolled": bool(enrollment and enrollment.pushed),
+        "enroll_mode": enrollment.mode if enrollment else None,
     }
 
 
@@ -205,6 +233,27 @@ def _append_certification(cert: dict) -> None:
             f.write(cert["markdown_row"] + "\n")
     except Exception:
         pass
+
+
+def _committer():
+    """Return a GitHub committer for live enrollment, or None (dry-run).
+
+    Only constructed when ENROLL_MODE=live; wiring the actual GitHub PR
+    opener is a deployment step (needs a scoped token). None → dry-run.
+    """
+    if os.environ.get("ENROLL_MODE") != "live":
+        return None
+    # Deployment provides the concrete committer; not built into the server
+    # so dry-run stays the safe default and tests never touch GitHub.
+    return None
+
+
+def _file_url(email: str, enrollment) -> str | None:
+    """Public URL where the newcomer's db file will live, if known."""
+    base = os.environ.get("DIRECTORY_RAW_BASE", "")  # e.g. the repo raw URL
+    if not base or enrollment is None:
+        return None
+    return f"{base.rstrip('/')}/{enrollment.path}"
 
 
 if __name__ == "__main__":

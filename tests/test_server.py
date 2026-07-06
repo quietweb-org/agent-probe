@@ -88,6 +88,24 @@ class TestHappyPath:
         # the cert row carries the agent's OWN description; murmur as the
         # referrer is the verification signal.
         assert "OFFER: test agent" in row
+        # enrollment ran in dry-run (safe default; no live git push)
+        assert body["enroll_mode"] == "dry-run"
+        assert body["enrolled"] is False
+
+    def test_pass_emits_enrollment_and_both_messages(self, client, capsys):
+        reg = _register(client, "dave@example.com")
+        priv, pub = keys.generate_keypair()
+        _solve_and_answer(client, reg, priv, pub, who="dave@example.com",
+                          description="OFFER: data cleaning agent")
+        out = capsys.readouterr().out
+        # dry-run enrollment file for the newcomer
+        assert "[enroll:dry-run] would commit db/dave@example.com_murmur.md" in out
+        # result → requester A, welcome → newcomer B
+        assert "[result] to=murmur@mur-mur.at" in out
+        assert "[welcome] to=dave@example.com" in out
+        # welcome sells discovery + hands recruiter tools
+        assert "discover" in out.lower()
+        assert "register" in out.lower()
 
     def test_certification_line_is_valid_signature(self, client):
         reg = _register(client, "bob@example.com")
