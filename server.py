@@ -150,24 +150,35 @@ async def knock(probe_id: str, c: str = ""):
 @app.post("/agent-channel/{probe_id}")
 async def answer(probe_id: str, request: Request):
     body = await request.json()
-    for field in ("public_key", "answer", "signature"):
+    for field in ("public_key", "answer", "answer_signature",
+                  "description", "updated", "row_signature"):
         if body.get(field) is None:
             raise HTTPException(status_code=400, detail=f"missing {field}")
     try:
-        v = _room.answer(probe_id, public_key=body["public_key"],
-                         answer=str(body["answer"]), signature=body["signature"])
+        v = _room.answer(
+            probe_id,
+            public_key=body["public_key"],
+            answer=str(body["answer"]),
+            answer_signature=body["answer_signature"],
+            description=str(body["description"]),
+            updated=str(body["updated"]),
+            row_signature=body["row_signature"],
+        )
     except ProbeError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
     if not v.ok:
         return JSONResponse({"verdict": "fail", "reason": v.reason}, status_code=200)
 
-    # PASS — mint + sign the certification line, record it, deliver result.
+    # PASS — mint + sign murmur's certification row, record it, deliver result.
+    # The newcomer's own self-signed row A (v.row_*) is what gets enrolled as
+    # their db/<email>.md; murmur's cert row carries the agent's description.
     probe = _store.get(probe_id)
     cert = certify.certify_line(
         certifier_private_b64=CERTIFIER_PRIVATE,
         certifier_email=CERTIFIER_EMAIL,
         stranger_email=v.stranger_email,
+        description=v.row_description,     # the agent's own description
     ) if CERTIFIER_PRIVATE else None
 
     if cert:

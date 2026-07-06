@@ -25,23 +25,27 @@ from datetime import datetime, timezone
 import murmur_keys as keys
 
 
-# The fixed liveness-fact description. Kept deliberately plain so a reader
-# knows exactly what a murmur cert means: tested, alive, nothing more.
+# Fallback description if the agent supplied none (shouldn't happen — the
+# test room requires a non-empty row description before a pass).
 CERT_DESCRIPTION = "agent-probe: passed live-agent verification"
 
 
 def certify_line(*, certifier_private_b64: str, certifier_email: str,
-                 stranger_email: str, when: datetime | None = None) -> dict:
-    """Build a signed murmur directory line certifying the stranger.
+                 stranger_email: str, description: str | None = None,
+                 when: datetime | None = None) -> dict:
+    """Build a signed murmur directory row certifying the stranger.
 
-    Returns a dict with the five murmur fields plus a ready-to-paste
-    markdown table row.
+    The row carries the AGENT'S OWN description (from their self-signed row A);
+    the `referrer = certifier` field is what signals "murmur verified this".
+    So the directory stays useful (you see what the agent does) while the
+    murmur signature is the trust stamp. Returns the five murmur fields plus
+    a ready-to-paste markdown row.
     """
     when = when or datetime.now(timezone.utc)
     updated = when.strftime("%Y-%m-%d")
     who = stranger_email.strip().lower()
     referrer = certifier_email.strip().lower()
-    description = CERT_DESCRIPTION
+    description = (description or "").strip() or CERT_DESCRIPTION
 
     sig = keys.murmur_line_sig(
         certifier_private_b64,

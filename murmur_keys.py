@@ -118,6 +118,24 @@ def murmur_line_sig(private_b64: str, *, who: str, referrer: str,
     return f"ed25519:{pub}:{sig}"
 
 
+def sign_row(private_b64: str, *, who: str, referrer: str,
+             description: str, updated: str) -> str:
+    """Sign a murmur row; return the RAW base64 signature (no pubkey prefix).
+
+    Used by an agent self-signing its own row A during a probe — the agent
+    sends this raw signature plus its public_key separately.
+    """
+    return sign(private_b64, _line_signed_bytes(who, referrer, description, updated))
+
+
+def verify_row(public_b64: str, signature_b64: str, *, who: str, referrer: str,
+               description: str, updated: str) -> bool:
+    """Verify a raw base64 row signature under a given public key. Never raises."""
+    return verify(public_b64,
+                  _line_signed_bytes(who, referrer, description, updated),
+                  signature_b64)
+
+
 def verify_murmur_line(sig_field: str, *, who: str, referrer: str,
                        description: str, updated: str) -> bool:
     """Verify a full murmur `sig` field against the row it claims to sign.

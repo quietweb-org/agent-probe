@@ -31,6 +31,25 @@ def _mint(room, email="alice@example.com"):
                      deliver_to="murmur@mur-mur.at")
 
 
+def _resp(*, priv, pub, probe_id, who, answer, description="OFFER: test agent",
+          updated="2026-07-03", answer_priv=None, row_priv=None):
+    """Build a full two-signature answer() kwargs dict.
+
+    answer_priv / row_priv override which key signs B / A (for forgery tests).
+    """
+    ap = answer_priv or priv
+    rp = row_priv or priv
+    return dict(
+        public_key=pub,
+        answer=answer,
+        answer_signature=keys.probe_sign(ap, probe_id, answer.strip()),
+        description=description,
+        updated=updated,
+        row_signature=keys.sign_row(rp, who=who, referrer="",
+                                    description=description, updated=updated),
+    )
+
+
 # ---------- crypto primitives ----------------------------------------------
 
 class TestKeys:
@@ -91,15 +110,20 @@ class TestPass:
         room = TestRoom(clock=clock)
         priv, pub = keys.generate_keypair()
         p = _mint(room)
-        knock = room.knock(p.probe_id, p.code)
+        room.knock(p.probe_id, p.code)
         assert p.state == CHALLENGED
         clock.advance(2)
-        ans = p.expected_answer
-        sig = keys.probe_sign(priv, p.probe_id, ans)
-        v = room.answer(p.probe_id, public_key=pub, answer=ans, signature=sig)
+        v = room.answer(p.probe_id, **_resp(
+            priv=priv, pub=pub, probe_id=p.probe_id, who="alice@example.com",
+            answer=p.expected_answer,
+            description="OFFER: translation agent, 40 languages"))
         assert v.ok and v.state == PASSED
         assert v.public_key == pub
         assert v.stranger_email == "alice@example.com"
+        # the newcomer's self-signed row is captured for enrollment
+        assert v.row_description == "OFFER: translation agent, 40 languages"
+        assert v.row_updated == "2026-07-03"
+        assert v.row_signature
 
     def test_answer_whitespace_tolerant(self):
         clock = _clock()
@@ -109,9 +133,10 @@ class TestPass:
         room.knock(p.probe_id, p.code)
         clock.advance(1)
         ans = p.expected_answer
-        # signature must be over the stripped answer (server strips before verify)
-        sig = keys.probe_sign(priv, p.probe_id, ans.strip())
-        v = room.answer(p.probe_id, public_key=pub, answer=f"  {ans}  ", signature=sig)
+        r = _resp(priv=priv, pub=pub, probe_id=p.probe_id,
+                  who="alice@example.com", answer=ans)
+        r["answer"] = f"  {ans}  "   # padded answer; sig is over the stripped form
+        v = room.answer(p.probe_id, **r)
         assert v.ok
 
 
@@ -129,26 +154,52 @@ class TestFail:
     def test_too_slow(self):
         clock, room, priv, pub, p = self._setup()
         clock.advance(ANSWER_WINDOW_SECONDS + 1)
-        ans = p.expected_answer
-        sig = keys.probe_sign(priv, p.probe_id, ans)
-        v = room.answer(p.probe_id, public_key=pub, answer=ans, signature=sig)
+        v = room.answer(p.probe_id, **_resp(
+            priv=priv, pub=pub, probe_id=p.probe_id, who="alice@example.com",
+            answer=p.expected_answer))
         assert not v.ok and v.reason == "too slow"
 
     def test_wrong_answer(self):
         clock, room, priv, pub, p = self._setup()
         clock.advance(1)
-        sig = keys.probe_sign(priv, p.probe_id, "wrong")
-        v = room.answer(p.probe_id, public_key=pub, answer="wrong", signature=sig)
+        v = room.answer(p.probe_id, **_resp(
+            priv=priv, pub=pub, probe_id=p.probe_id, who="alice@example.com",
+            answer="wrong"))
         assert not v.ok and v.reason == "wrong answer"
 
-    def test_bad_signature(self):
+    def test_bad_answer_signature(self):
         clock, room, priv, pub, p = self._setup()
         other_priv, _ = keys.generate_keypair()
         clock.advance(1)
-        ans = p.expected_answer
-        sig = keys.probe_sign(other_priv, p.probe_id, ans)  # wrong key
-        v = room.answer(p.probe_id, public_key=pub, answer=ans, signature=sig)
-        assert not v.ok and v.reason == "bad signature"
+        v = room.answer(p.probe_id, **_resp(
+            priv=priv, pub=pub, probe_id=p.probe_id, who="alice@example.com",
+            answer=p.expected_answer, answer_priv=other_priv))  # B by wrong key
+        assert not v.ok and v.reason == "bad answer signature"
+
+    def test_bad_row_signature(self):
+        clock, room, priv, pub, p = self._setup()
+        other_priv, _ = keys.generate_keypair()
+        clock.advance(1)
+        v = room.answer(p.probe_id, **_resp(
+            priv=priv, pub=pub, probe_id=p.probe_id, who="alice@example.com",
+            answer=p.expected_answer, row_priv=other_priv))  # A by wrong key
+        assert not v.ok and v.reason == "bad row signature"
+
+    def test_empty_description_rejected(self):
+        clock, room, priv, pub, p = self._setup()
+        clock.advance(1)
+        v = room.answer(p.probe_id, **_resp(
+            priv=priv, pub=pub, probe_id=p.probe_id, who="alice@example.com",
+            answer=p.expected_answer, description=""))
+        assert not v.ok and v.reason == "bad row description"
+
+    def test_overlong_description_rejected(self):
+        clock, room, priv, pub, p = self._setup()
+        clock.advance(1)
+        v = room.answer(p.probe_id, **_resp(
+            priv=priv, pub=pub, probe_id=p.probe_id, who="alice@example.com",
+            answer=p.expected_answer, description="x" * 280))
+        assert not v.ok and v.reason == "bad row description"
 
 
 # ---------- state machine guards -------------------------------------------
@@ -178,7 +229,9 @@ class TestGuards:
         priv, pub = keys.generate_keypair()
         p = _mint(room)
         with pytest.raises(ProbeError):
-            room.answer(p.probe_id, public_key=pub, answer="x", signature="y")
+            room.answer(p.probe_id, **_resp(
+                priv=priv, pub=pub, probe_id=p.probe_id,
+                who="alice@example.com", answer="x"))
 
     def test_single_use_no_reanswer(self):
         clock = _clock()
@@ -187,12 +240,12 @@ class TestGuards:
         p = _mint(room)
         room.knock(p.probe_id, p.code)
         clock.advance(1)
-        ans = p.expected_answer
-        sig = keys.probe_sign(priv, p.probe_id, ans)
-        room.answer(p.probe_id, public_key=pub, answer=ans, signature=sig)
-        # second answer attempt must be rejected
+        r = _resp(priv=priv, pub=pub, probe_id=p.probe_id,
+                  who="alice@example.com", answer=p.expected_answer)
+        room.answer(p.probe_id, **r)
+        # second answer attempt must be rejected (state no longer CHALLENGED)
         with pytest.raises(ProbeError):
-            room.answer(p.probe_id, public_key=pub, answer=ans, signature=sig)
+            room.answer(p.probe_id, **r)
 
     def test_reknock_idempotent_same_puzzle(self):
         clock = _clock()

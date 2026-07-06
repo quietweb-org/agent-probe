@@ -73,18 +73,32 @@ class Probe:
     answered_at: str | None = None
     public_key: str | None = None
     verdict_reason: str | None = None
+    # the newcomer's self-signed row A (kept for enrollment):
+    row_description: str | None = None
+    row_updated: str | None = None
+    row_signature: str | None = None
 
     def to_public_knock(self) -> dict:
         """What the stranger receives on knock — never leaks expected_answer."""
         return {
             "probe_id": self.probe_id,
+            "who": self.stranger_email,
             "challenge": self.challenge_text,
             "sign_instruction": (
-                f"Solve the challenge. Sign the exact ASCII string "
-                f"'murmur-probe/{self.probe_id}/<your_answer>' with your "
-                f"ed25519 key. POST back JSON: "
-                f'{{"public_key": "<base64>", "answer": "<your_answer>", '
-                f'"signature": "<base64>"}} within {ANSWER_WINDOW_SECONDS}s.'
+                "Solve the challenge, then POST JSON with TWO signatures from "
+                "the same ed25519 key:\n"
+                '  {"public_key": "<b64>",\n'
+                '   "answer": "<puzzle answer>",\n'
+                '   "answer_signature": "<b64 sig over '
+                f"murmur-probe/{self.probe_id}/<answer>>\",\n"
+                '   "description": "<your murmur row description, <280 chars, '
+                'prefix REQUEST:/HELP:/OFFER:>",\n'
+                '   "updated": "<YYYY-MM-DD>",\n'
+                '   "row_signature": "<b64 sig over your self-signed murmur '
+                f'row: who={self.stranger_email}, referrer=(empty), '
+                'description, updated>"}\n'
+                f"within {ANSWER_WINDOW_SECONDS}s. row_signature enrolls your "
+                "own directory entry; answer_signature proves the live solve."
             ),
             "window_seconds": ANSWER_WINDOW_SECONDS,
         }
@@ -97,6 +111,10 @@ class Verdict:
     reason: str | None = None
     public_key: str | None = None
     stranger_email: str | None = None
+    # on pass, the newcomer's self-signed row A fields (for enrollment):
+    row_description: str | None = None
+    row_updated: str | None = None
+    row_signature: str | None = None
 
 
 class TestRoom:
@@ -170,7 +188,20 @@ class TestRoom:
     # -- answer --------------------------------------------------------------
 
     def answer(self, probe_id: str, *, public_key: str, answer: str,
-               signature: str) -> Verdict:
+               answer_signature: str, description: str, updated: str,
+               row_signature: str) -> Verdict:
+        """Verify the two-signature response.
+
+        A pass requires ALL of:
+          - timing: within the window (live automation)
+          - answer: correct solution to the fresh puzzle (intelligence)
+          - answer_signature (B): valid over murmur-probe/<id>/<answer>
+            under public_key (freshness + identity)
+          - row_signature (A): valid over the newcomer's self-signed murmur
+            row {who=stranger_email, referrer="", description, updated} under
+            the SAME public_key (enrolls their own directory entry)
+          - the row's description is non-empty and <280 chars (murmur rule)
+        """
         p = self._store.get(probe_id)
         if not p:
             raise ProbeError("unknown probe")
@@ -195,17 +226,35 @@ class TestRoom:
         if answer.strip() != (p.expected_answer or "").strip():
             return _fail("wrong answer")
 
-        # 3. identity + freshness (signature over the exact bound string)
-        if not keys.probe_verify(public_key, probe_id, answer.strip(), signature):
-            return _fail("bad signature")
+        # 3. answer signature B — freshness + identity
+        if not keys.probe_verify(public_key, probe_id, answer.strip(),
+                                 answer_signature):
+            return _fail("bad answer signature")
 
-        # all three hold
+        # 4. row description sanity (murmur: <280 chars, non-empty)
+        desc = (description or "").strip()
+        if not desc or len(desc) >= 280:
+            return _fail("bad row description")
+
+        # 5. row signature A — the newcomer's self-signed directory entry
+        #    (referrer empty = self-signed). who is what we minted for.
+        if not keys.verify_row(public_key, row_signature,
+                               who=p.stranger_email, referrer="",
+                               description=desc, updated=(updated or "").strip()):
+            return _fail("bad row signature")
+
+        # all hold
         p.state = PASSED
         p.answered_at = now.isoformat(timespec="seconds")
         p.public_key = public_key
+        p.row_description = desc
+        p.row_updated = (updated or "").strip()
+        p.row_signature = row_signature
         self._store[probe_id] = p
         return Verdict(True, PASSED, None, public_key=public_key,
-                       stranger_email=p.stranger_email)
+                       stranger_email=p.stranger_email,
+                       row_description=desc, row_updated=p.row_updated,
+                       row_signature=row_signature)
 
 
 class ProbeError(Exception):

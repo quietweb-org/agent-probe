@@ -50,7 +50,8 @@ def _register(client, stranger="alice@example.com"):
     return r.json()
 
 
-def _solve_and_answer(client, reg, priv, pub):
+def _solve_and_answer(client, reg, priv, pub, *, who="alice@example.com",
+                      description="OFFER: test agent", updated="2026-07-03"):
     # knock
     pid = reg["probe_id"]
     r = client.get(f"/agent-channel/{pid}", params={"c": reg["code"]})
@@ -58,9 +59,14 @@ def _solve_and_answer(client, reg, priv, pub):
     # the server holds the expected answer; in a test we peek via the store
     import server
     expected = server._store.get(pid).expected_answer
-    sig = keys.probe_sign(priv, pid, expected)
     return client.post(f"/agent-channel/{pid}", json={
-        "public_key": pub, "answer": expected, "signature": sig,
+        "public_key": pub,
+        "answer": expected,
+        "answer_signature": keys.probe_sign(priv, pid, expected),
+        "description": description,
+        "updated": updated,
+        "row_signature": keys.sign_row(priv, who=who, referrer="",
+                                       description=description, updated=updated),
     })
 
 
@@ -79,12 +85,14 @@ class TestHappyPath:
         row = body["certification"]
         assert "alice@example.com" in row
         assert "murmur@mur-mur.at" in row
-        assert "passed live-agent verification" in row
+        # the cert row carries the agent's OWN description; murmur as the
+        # referrer is the verification signal.
+        assert "OFFER: test agent" in row
 
     def test_certification_line_is_valid_signature(self, client):
         reg = _register(client, "bob@example.com")
         priv, pub = keys.generate_keypair()
-        r = _solve_and_answer(client, reg, priv, pub)
+        r = _solve_and_answer(client, reg, priv, pub, who="bob@example.com")
         row = r.json()["certification"]
         # parse the markdown row back into fields and verify the sig
         cells = [c.strip() for c in row.strip("|").split("|")]
@@ -97,7 +105,7 @@ class TestHappyPath:
     def test_certification_appended_to_murmur_md(self, client):
         reg = _register(client, "carol@example.com")
         priv, pub = keys.generate_keypair()
-        _solve_and_answer(client, reg, priv, pub)
+        _solve_and_answer(client, reg, priv, pub, who="carol@example.com")
         content = client._murmur_md.read_text()
         assert "carol@example.com" in content
 
@@ -108,9 +116,16 @@ class TestFailPaths:
         priv, pub = keys.generate_keypair()
         pid = reg["probe_id"]
         client.get(f"/agent-channel/{pid}", params={"c": reg["code"]})
-        sig = keys.probe_sign(priv, pid, "nonsense")
         r = client.post(f"/agent-channel/{pid}", json={
-            "public_key": pub, "answer": "nonsense", "signature": sig})
+            "public_key": pub,
+            "answer": "nonsense",
+            "answer_signature": keys.probe_sign(priv, pid, "nonsense"),
+            "description": "OFFER: x",
+            "updated": "2026-07-03",
+            "row_signature": keys.sign_row(priv, who="alice@example.com",
+                                           referrer="", description="OFFER: x",
+                                           updated="2026-07-03"),
+        })
         assert r.status_code == 200
         assert r.json()["verdict"] == "fail"
         assert r.json()["reason"] == "wrong answer"
@@ -131,5 +146,7 @@ class TestFailPaths:
         reg = _register(client)
         priv, pub = keys.generate_keypair()
         r = client.post(f"/agent-channel/{reg['probe_id']}", json={
-            "public_key": pub, "answer": "x", "signature": "y"})
+            "public_key": pub, "answer": "x",
+            "answer_signature": "y", "description": "OFFER: x",
+            "updated": "2026-07-03", "row_signature": "z"})
         assert r.status_code == 409
