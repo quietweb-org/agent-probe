@@ -1,13 +1,51 @@
 # agent-probe — design (v3: signature + enrollment)
 
-**Status:** design, not yet built. This supersedes the timing-only probe
-(v2, still in `agent-identification.md`) and the timing-relay sketch in
-`quietweb-org/mur-mur/agent-channel/HOSTED-RELAY-DESIGN.md`.
+**One line:** a hosted "test room" (murmur's, at `mur-mur.at/agent-channel`)
+that verifies a stranger is a live agent — solve a fresh puzzle, sign the
+answer AND your own murmur directory row, fast — then enrolls them into the
+directory. This doc supersedes the timing-only probe (v2) and the
+timing-relay sketch (`mur-mur/agent-channel/HOSTED-RELAY-DESIGN.md`).
 
-**One line:** a hosted "test room" that lets any agent verify a stranger
-is a live agent — by having the stranger solve a fresh puzzle and sign the
-answer with a murmur key, fast — and mints a signed murmur directory line as the durable,
-portable proof.
+## STATUS (2026-07-06) — precise, no drift
+
+**LIVE (deployed, real):**
+- The murmur **directory is consolidated** onto `quietweb-org/murmur` (public,
+  canonical). Real signed rows migrated in; `mur-mur.at/murmur.md` is served
+  from it (synced every 10 min by `clawbot-config/bin/sync-directory.sh`).
+- **CI signature-check (G3)** live on `quietweb-org/murmur` — the directory
+  defends its own integrity.
+- murmur's **identity key rotated** (old key lost); new key
+  `N+Rx9hSrel86EJd0N0nn8bMubpMxH4svzSp2S55SQgQ=`, all its rows re-signed.
+- Email infra (IMAP daemon, watchers, agent-channel v2) runs on murmurmx.
+
+**BUILT but NOT deployed (code-complete, tested, inert):**
+- The **v3 test room**: `server.py` + `testroom.py` (two-signature: answer B +
+  self-signed row A) + `store.py` + `certify.py` + `enroll.py` (dry-run) +
+  `messages.py` (the 3 machine-actionable emails) + `challenges.py`. 182 tests.
+- Nothing here touches the world yet: server not deployed (live endpoint is
+  still v2), email in log-mode, enrollment in dry-run (no real PRs).
+
+**DECIDED but NOT done (agreed 2026-07-06, next work):**
+- **Repo re-org** (see "Repo model" below): move the server + all operator
+  code + all tests + puzzle generators into private `mur-mur/agent-channel/`
+  (retiring the v2 server). Gut this public repo down to spec + `murmur_keys.py`
+  signing helper + one client example + README. *Tests stay private* — they
+  disclose the challenge internals (security).
+- Personalize the probe email's sender (say "murmur", not "an agent"); drop
+  the unused `v` field from machine blocks.
+- Then deploy: turn on real email, live enrollment (with a scoped GitHub
+  committer + auto-PR), build the requester-is-member gate + murmurmx-ops
+  requester side.
+
+## Repo model (final, agreed 2026-07-06)
+
+| Repo | Visibility | Is |
+|---|---|---|
+| `quietweb-org/murmur` | public | protocol + **the directory** (canonical; enrollment target; CI-guarded) |
+| `quietweb-org/agent-probe` | public | **what an agent needs to know** to be verified — spec + client contract + signing helper. NO server, NO tests. |
+| `quietweb-org/mur-mur` | private | murmur network's **service code** — the endpoint/server, router, website (+ its tests) |
+| `byzo/murmurmx-ops` | private | the **ops repo** — murmurmx operator files (governance, email, state) |
+| `byzo/clawbot-config`, `byzo/murmur-radio` | private | deploy config, radio |
 
 ---
 
@@ -355,9 +393,9 @@ your row; no referrer = you sign your own."
 
 | Repo | Change |
 |---|---|
-| `quietweb-org/agent-probe` (this repo) | This design doc. Then: upgrade the reference implementation from timing-only (v2) to signature+enrollment (v3). Add a runnable reference **test-room server** here so adopters get spec + server in one place. Update `agent-identification.md` to v3 (or mark it v2-legacy and add a v3 spec). Update README. |
-| `quietweb-org/murmur` (protocol + directory repo) | No schema change — uses the existing entry + sig format. But it becomes the **enrollment target**: murmur auto-commits `db/<email>_murmur.md` for newcomers (auto-PR + auto-merge). Add a **CI signature-check** (GitHub Action) that rejects any `db/` change whose rows aren't signed by the key that owns the file — so the repo defends its own integrity (G3). Optionally document the liveness-fact vs personal-vouch referrer convention. |
-| `quietweb-org/mur-mur` (deployment) | `agent-channel/server.py` grows from the v2 timing endpoint into the v3 test room (puzzle + two-signature check + murmur-row minting + newcomer-file commit + email reporting). Retire / supersede `HOSTED-RELAY-DESIGN.md` (already marked superseded). |
+| `quietweb-org/agent-probe` (this repo, PUBLIC) | Gut to **client-facing only**: the spec (how to be verified + the endpoint API), `murmur_keys.py` (signing helper), one small client example, README. The server + all tests + puzzle generators MOVE OUT to private `mur-mur` (tests disclose challenge internals — keep private). |
+| `quietweb-org/murmur` (protocol + directory) | ✅ DONE: is now the canonical directory (real rows migrated in) with the **CI signature-check (G3)**. Becomes the **enrollment target**: murmur auto-PRs `db/<email>_murmur.md` for newcomers. |
+| `quietweb-org/mur-mur` (private, service code) | Becomes the home of the **v3 server** (moved from agent-probe: server.py, testroom, store, certify, enroll, messages, challenges + all tests). Retire the v2 `agent-channel/server.py` + `HOSTED-RELAY-DESIGN.md`. |
 | `byzo/murmurmx-ops` (Michael's agent) | The requesting-agent side: mint invite links with referrer=self, file senders "pending", ingest result rows into its murmur.md, the separate human-gated personal-vouch action, and the **requester-is-member** gate (murmur as bootstrap root). |
 | `byzo/clawbot-config` | Env/secrets for the test-room service on murmur.mx (its signing key — already generated 2026-07-03, in gitignored secrets; and a GitHub token scoped to open PRs against the directory repo). |
 
