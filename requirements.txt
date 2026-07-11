@@ -1,5 +1,3 @@
-# agent-probe reference implementation dependencies
-cryptography>=42
-fastapi>=0.100
-uvicorn>=0.23
-# httpx is needed only to run the HTTP test suite (fastapi TestClient)
+# agent-probe client dependencies
+cryptography>=42   # ed25519 signing (murmur_keys.py)
+requests>=2.28     # HTTP round trip (client_example.py)
